@@ -1,0 +1,6 @@
+aiohttp>=3.9.0
+colorama>=0.4.6
+telethon>=1.33.1
+aiogram>=3.4.1
+hypothesis>=6.98
+python-dotenv>=1.0.0  # optional: loads secrets from a local .env file

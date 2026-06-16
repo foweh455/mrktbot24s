@@ -1,0 +1,25 @@
+# Secrets / environment
+.env
+.env.*
+
+# Telegram session files (contain login credentials — NEVER commit)
+*.session
+*.session-journal
+
+# Local databases & runtime state
+*.sqlite3
+runtime_state.json
+
+# Generated debug / discovery output
+debug_output.txt
+discover_output.txt
+discover_results.json
+test_buy_results.json
+sort_out.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
