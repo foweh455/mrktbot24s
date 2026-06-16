@@ -1,126 +1,126 @@
 # MRKT NFT Gift Sniper Bot
 
-Асинхронный бот-снайпер для [MRKT](https://t.me/mrkt) — площадки торговли Telegram NFT-подарками. Сканирует глобальный фид листингов, принимает решение о покупке по настраиваемым гейтам (скидка к флору, баланс, trade-lock, плотность рынка, редкость) и умеет автоматически перепродавать купленные лоты с поддержкой ручного вмешательства из Telegram.
+An asynchronous sniper bot for [MRKT](https://t.me/mrkt) — a marketplace for trading Telegram NFT gifts. It scans the global listing feed, makes buy decisions based on configurable gates (discount to floor, balance, trade-lock, market depth, rarity), and can automatically resell purchased lots with support for manual intervention from Telegram.
 
-> **Примечание.** Раньше в этом README был базовый пример из неофициальной документации MRKT API. Он устарел — реальная архитектура ушла далеко вперёд. Базовый пример перенесён в конец документа для справки.
-
----
-
-## Оглавление
-
-- [Что делает бот](#что-делает-бот)
-- [Требования](#требования)
-- [Быстрый старт](#быстрый-старт)
-- [Структура проекта](#структура-проекта)
-- [Как работает основной цикл](#как-работает-основной-цикл)
-- [Стратегии покупки](#стратегии-покупки)
-- [Гейты (фильтры) перед покупкой](#гейты-фильтры-перед-покупкой)
-- [Движок автопродажи](#движок-автопродажи)
-- [Telegram-управление](#telegram-управление)
-- [Состояние и персистентность](#состояние-и-персистентность)
-- [Логирование и диагностика](#логирование-и-диагностика)
-- [Известные ограничения и технический долг](#известные-ограничения-и-технический-долг)
-- [Базовый пример MRKT API](#базовый-пример-mrkt-api)
+> **Note.** This README used to contain a basic example from the unofficial MRKT API docs. It's outdated — the real architecture has moved far beyond it. The basic example has been moved to the end of the document for reference.
 
 ---
 
-## Что делает бот
+## Table of Contents
 
-1. **Сканирует** глобальный фид MRKT (`POST /api/v1/gifts/saling` с `ordering=None, count=100`) примерно раз в секунду и подтягивает floor-цены всех отслеживаемых коллекций.
-2. **Фильтрует** новые листинги по ряду правил (см. раздел про гейты) и принимает решение о покупке.
-3. **Покупает** выбранный лот (`POST /api/v1/gifts/buy`), сразу уходит в паузу и сохраняет покупку в SQLite (`autosell.sqlite3`).
-4. **Уведомляет** в Telegram об успехе (с причиной покупки, ценой, скидкой, редкостью и ID подарка).
-5. **Автопродаёт** купленные лоты: ставит первоначальную цену, периодически релистит по floor, шлёт критические prompt-ы в ТГ при застое или достижении лимита изменений цены.
-6. Управляется из Telegram через inline-меню: пороги скидок, баланс, толглы для всех стратегий, статистика промахов.
-
-Поддерживаются **три независимые стратегии покупки**, которые можно включать/выключать по отдельности:
-
-- **Обычный floor-снайпер** — ниже флора на заданный % (по бакетам цены).
-- **Rare-model premium** — редкие модели с премией к флору в пределах лимита.
-- **Rare-model below-floor force-buy** — редкие модели ниже флора покупаем безотносительно обычных порогов скидки.
-
-Отдельно работает **движок автопродажи** (`AutoSellEngine`), полностью развязанный с циклом покупки.
-
----
-
-## Требования
-
-- Python **3.10+** (используется синтаксис `X | None`, `dict[K, V]` без `from __future__`)
-- Windows/Linux (на Windows поддерживается звуковой алерт через `winsound`)
-- Telegram-аккаунт с api_id/api_hash от [my.telegram.org](https://my.telegram.org/auth)
-- Telegram-бот с токеном (через [@BotFather](https://t.me/BotFather)) — для панели управления и уведомлений
-
-Python-зависимости (из `requirements.txt`): `aiohttp`, `aiogram`, `telethon`, `colorama`.
+- [What the bot does](#what-the-bot-does)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Project structure](#project-structure)
+- [How the main loop works](#how-the-main-loop-works)
+- [Buy strategies](#buy-strategies)
+- [Pre-purchase gates (filters)](#pre-purchase-gates-filters)
+- [Auto-sell engine](#auto-sell-engine)
+- [Telegram control](#telegram-control)
+- [State and persistence](#state-and-persistence)
+- [Logging and diagnostics](#logging-and-diagnostics)
+- [Known limitations and technical debt](#known-limitations-and-technical-debt)
+- [Basic MRKT API example](#basic-mrkt-api-example)
 
 ---
 
-## Быстрый старт
+## What the bot does
 
-### 1. Установка
+1. **Scans** the global MRKT feed (`POST /api/v1/gifts/saling` with `ordering=None, count=100`) roughly once per second and pulls floor prices for all tracked collections.
+2. **Filters** new listings through a set of rules (see the gates section) and makes a buy decision.
+3. **Buys** the selected lot (`POST /api/v1/gifts/buy`), immediately pauses, and saves the purchase to SQLite (`autosell.sqlite3`).
+4. **Notifies** Telegram on success (with the buy reason, price, discount, rarity, and gift ID).
+5. **Auto-sells** purchased lots: sets the initial price, periodically relists at floor, and sends critical prompts to Telegram when a lot is stuck or the price-change limit is reached.
+6. Is controlled from Telegram via inline menus: discount thresholds, balance, toggles for all strategies, miss statistics.
+
+It supports **three independent buy strategies** that can be toggled on/off individually:
+
+- **Regular floor sniper** — below floor by a configured % (per price bucket).
+- **Rare-model premium** — rare models with a premium over floor within a limit.
+- **Rare-model below-floor force-buy** — rare models below floor are bought regardless of the regular discount thresholds.
+
+Separately, an **auto-sell engine** (`AutoSellEngine`) runs fully decoupled from the buy loop.
+
+---
+
+## Requirements
+
+- Python **3.10+** (uses the `X | None`, `dict[K, V]` syntax without `from __future__`)
+- Windows/Linux (on Windows a sound alert via `winsound` is supported)
+- A Telegram account with api_id/api_hash from [my.telegram.org](https://my.telegram.org/auth)
+- A Telegram bot with a token (via [@BotFather](https://t.me/BotFather)) — for the control panel and notifications
+
+Python dependencies (from `requirements.txt`): `aiohttp`, `aiogram`, `telethon`, `colorama`.
+
+---
+
+## Quick start
+
+### 1. Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Настройка `config.py`
+### 2. Configuration (`config.py` / `.env`)
 
-Откройте `config.py` и заполните:
+Secrets are read from environment variables. Copy `.env.example` to `.env` and fill in:
 
-| Константа | Где взять | Для чего |
+| Variable | Where to get it | What it's for |
 | --- | --- | --- |
-| `TELEGRAM_API_ID` | [my.telegram.org](https://my.telegram.org/auth) | авто-получение токена MRKT через Telethon |
-| `TELEGRAM_API_HASH` | там же | то же |
-| `API_TOKEN` | можно оставить пустой — бот получит сам | токен MRKT API |
-| `TELEGRAM_NOTIFY_BOT_TOKEN` | [@BotFather](https://t.me/BotFather) | отправка уведомлений и inline-меню |
-| `TELEGRAM_NOTIFY_CHAT_ID` | ваш chat_id (узнать у [@userinfobot](https://t.me/userinfobot)) | куда слать уведомления, кому разрешено пользоваться меню |
+| `TELEGRAM_API_ID` | [my.telegram.org](https://my.telegram.org/auth) | auto-fetching the MRKT token via Telethon |
+| `TELEGRAM_API_HASH` | same place | same |
+| `API_TOKEN` | can be left empty — the bot fetches it itself | MRKT API token |
+| `TELEGRAM_NOTIFY_BOT_TOKEN` | [@BotFather](https://t.me/BotFather) | sending notifications and the inline menu |
+| `TELEGRAM_NOTIFY_CHAT_ID` | your chat_id (find it via [@userinfobot](https://t.me/userinfobot)) | where to send notifications and who is allowed to use the menu |
 
-> Секреты сейчас лежат прямо в `config.py`. Перед публикацией репозитория обязательно вынесите их в переменные окружения или `.env`.
+> Never commit real secrets. `config.py` loads them from the environment (via `python-dotenv`); keep your `.env` out of git (it's already in `.gitignore`).
 
-### 3. Первый запуск
+### 3. First run
 
 ```bash
 python authenticator.py
 ```
 
-Это запустит авторизацию через Telegram (попросит номер телефона и код). Telethon создаст файл `mrkt_telethon_session.session`. После успешного обмена будет выведен новый токен MRKT.
+This starts authorization via Telegram (it asks for your phone number and a code). Telethon creates the `mrkt_telethon_session.session` file. After a successful exchange, a new MRKT token is printed.
 
-### 4. Запуск снайпера
+### 4. Running the sniper
 
 ```bash
 python main.py
 ```
 
-При старте бот:
-- загрузит список коллекций и флор-цены;
-- отправит приветственное уведомление в Telegram (с защитой от спама — не чаще чем раз в 15 минут при быстрых рестартах);
-- выведет в консоль список отслеживаемых коллекций и начнёт скан.
+On startup the bot:
+- loads the list of collections and floor prices;
+- sends a welcome notification to Telegram (with anti-spam protection — no more than once every 15 minutes during fast restarts);
+- prints the list of tracked collections to the console and starts scanning.
 
 ---
 
-## Структура проекта
+## Project structure
 
-| Файл | Назначение |
+| File | Purpose |
 | --- | --- |
-| `main.py` | главный цикл: скан → оценка → покупка → пауза |
-| `scanner.py` | `Scanner` и `Listing`: запросы к `/gifts/saling`, фильтр trade-lock, расчёт скидки |
-| `api.py` | `MRKTClient`: асинхронный HTTP-клиент, авто-обновление токена, ретраи на 429/5xx |
-| `authenticator.py` | получение свежего токена MRKT через Telethon и `/api/v1/auth` |
-| `config.py` | все константы: API, пороги скидок, гейты, настройки автопродажи |
-| `state.py` | `AppState`: персистентное runtime-состояние (пороги, балансы, статистика) |
-| `rare_model_strategy.py` | логика отбора редких моделей (премия/below-floor) |
-| `sniper_metrics.py` | учёт промахов: "куплен раньше нас", "не хватило баланса" (по бакетам цены) |
-| `autosell.py` | `AutoSellEngine`: фоновый воркер автопродажи, prompt-ы в ТГ |
-| `autosell_store.py` | SQLite-хранилище лотов, purchases, critical-prompts, action log |
-| `tg_controller.py` | aiogram-бот: inline-меню, команды `/menu`, `/rare`, `/sell`, `/stats`, обработка callback-ов |
-| `bot.py` | цветной консольный вывод, ASCII-баннер, звуковой алерт |
-| `text_normalizer.py` | эвристическая починка mojibake в текстах (см. "Известные ограничения") |
-| `runtime_state.json` | персистентные поля `AppState` (создаётся автоматически) |
-| `autosell.sqlite3` | БД автопродажи (создаётся автоматически) |
-| `mrkt_telethon_session.session` | сессия Telethon (создаётся после `authenticator.py`) |
+| `main.py` | main loop: scan → evaluate → buy → pause |
+| `scanner.py` | `Scanner` and `Listing`: requests to `/gifts/saling`, trade-lock filter, discount calculation |
+| `api.py` | `MRKTClient`: async HTTP client, auto token refresh, retries on 429/5xx |
+| `authenticator.py` | fetching a fresh MRKT token via Telethon and `/api/v1/auth` |
+| `config.py` | all constants: API, discount thresholds, gates, auto-sell settings |
+| `state.py` | `AppState`: persistent runtime state (thresholds, balances, statistics) |
+| `rare_model_strategy.py` | rare-model selection logic (premium/below-floor) |
+| `sniper_metrics.py` | miss tracking: "bought before us", "not enough balance" (per price bucket) |
+| `autosell.py` | `AutoSellEngine`: background auto-sell worker, Telegram prompts |
+| `autosell_store.py` | SQLite storage for lots, purchases, critical-prompts, action log |
+| `tg_controller.py` | aiogram bot: inline menu, `/menu`, `/rare`, `/sell`, `/stats` commands, callback handling |
+| `bot.py` | colored console output, ASCII banner, sound alert |
+| `text_normalizer.py` | heuristic mojibake repair in text (see "Known limitations") |
+| `runtime_state.json` | persistent `AppState` fields (created automatically) |
+| `autosell.sqlite3` | auto-sell DB (created automatically) |
+| `mrkt_telethon_session.session` | Telethon session (created after `authenticator.py`) |
 
 ---
 
-## Как работает основной цикл
+## How the main loop works
 
 ```
 ┌─────────────────┐
@@ -129,147 +129,147 @@ python main.py
         │
         ▼
 ┌───────────────────────────────┐
-│ загрузка коллекций и floor-   │
-│ цен (Scanner.refresh_floor_   │
+│ load collections and floor    │
+│ prices (Scanner.refresh_floor_│
 │ prices)                       │
 └───────┬───────────────────────┘
         │
         ▼
 ┌───────────────────────────────┐
-│ запуск фоновых задач:         │
+│ start background tasks:       │
 │  - run_bot (tg_controller)    │
 │  - AutoSellEngine.run         │
 └───────┬───────────────────────┘
         │
         ▼
 ┌───────────────────────────────┐
-│  цикл (SCAN_INTERVAL_SECONDS) │
-│  1. раз в ~60 сканов refresh  │
+│  loop (SCAN_INTERVAL_SECONDS) │
+│  1. ~every 60 scans, refresh  │
 │     floor                     │
-│  2. state.is_running? нет →   │
-│     sleep, иначе:             │
+│  2. state.is_running? no →    │
+│     sleep, otherwise:         │
 │  3. scan_all() → below_floor, │
 │     all_new                   │
-│  4. подбор rare-candidate-ов  │
-│  5. звук alert, вывод         │
-│  6. AUTO_BUY: попытки купить  │
-│     в приоритете              │
+│  4. pick rare candidates      │
+│  5. sound alert, output       │
+│  6. AUTO_BUY: buy attempts    │
+│     in priority order         │
 │     rare_floor → floor → rare │
-│  7. при удаче → is_running =  │
-│     False, TG-уведомление     │
+│  7. on success → is_running = │
+│     False, TG notification    │
 └───────────────────────────────┘
 ```
 
-**Параметры тайминга** (все в `config.py`):
+**Timing parameters** (all in `config.py`):
 
-- `SCAN_INTERVAL_SECONDS = 1` — интервал скана
-- `LISTINGS_PER_SCAN = 50` — сколько лотов на запрос (fallback до 20 при 400)
-- `MAX_CONCURRENT_REQUESTS = 7` — семафор внутри `MRKTClient`
-- `PAUSE_STATUS_LOG_INTERVAL_SECONDS = 30` — как часто логировать "на паузе"
+- `SCAN_INTERVAL_SECONDS = 1` — scan interval
+- `LISTINGS_PER_SCAN = 50` — how many lots per request (falls back to 20 on a 400)
+- `MAX_CONCURRENT_REQUESTS = 7` — semaphore inside `MRKTClient`
+- `PAUSE_STATUS_LOG_INTERVAL_SECONDS = 30` — how often to log "paused"
 
-**Refresh флора** сейчас = `max(15, round(60 / SCAN_INTERVAL_SECONDS))` сканов (см. *Известные ограничения*).
+**Floor refresh** is currently `max(15, round(60 / SCAN_INTERVAL_SECONDS))` scans (see *Known limitations*).
 
 ---
 
-## Стратегии покупки
+## Buy strategies
 
-### 1. Обычный floor-снайпер (`mode = "floor"`)
+### 1. Regular floor sniper (`mode = "floor"`)
 
-Срабатывает на листингах ниже флора. Минимальная скидка зависит от цены лота:
+Triggers on listings below floor. The minimum discount depends on the lot price:
 
-| Цена лота | Требуемая скидка (дефолт) | Runtime-поле |
+| Lot price | Required discount (default) | Runtime field |
 | --- | --- | --- |
 | `< 4 TON` | `4.0%` | `state.discount_cheap` |
 | `4-10 TON` | `3.0%` | `state.discount_expensive` (legacy) |
 | `10-20 TON` | `3.0%` | `state.discount_10_20` |
 | `>= 20 TON` | `3.0%` | `state.discount_20_plus` |
 
-Порог `state.threshold = 4.0` разделяет "дешёвые" и "обычные". Пороги настраиваются через `/menu` в Telegram.
+The `state.threshold = 4.0` value splits "cheap" from "regular". Thresholds are configured via `/menu` in Telegram.
 
 ### 2. Rare-model premium (`mode = "rare_model"`)
 
-Включается/выключается через `/rare` (после каждого рестарта принудительно OFF). Ловит редкие модели **выше флора**, если премия в пределах лимита.
+Toggled via `/rare` (forced OFF after every restart). Catches rare models **above floor** if the premium is within the limit.
 
-- Минимальная цена: **5 TON** (жёсткий хардкод, не понижается)
-- Максимальная редкость модели: `state.rare_max_rarity_percent = 1.0%`
-- Премия для 5-10 TON: `state.rare_premium_5_10 = 10.0%`
-- Премия для 10+ TON: `state.rare_premium_10_plus = 10.0%`
-- Баланс: отдельный, `state.rare_balance = 6.0 TON`
+- Minimum price: **5 TON** (hard-coded, not lowered)
+- Maximum model rarity: `state.rare_max_rarity_percent = 1.0%`
+- Premium for 5-10 TON: `state.rare_premium_5_10 = 10.0%`
+- Premium for 10+ TON: `state.rare_premium_10_plus = 10.0%`
+- Balance: separate, `state.rare_balance = 6.0 TON`
 
 ### 3. Rare-model below-floor force-buy (`mode = "rare_model_floor"`)
 
-Включается флагом `RARE_MODEL_BELOW_FLOOR_FORCE_BUY = True` в `config.py`. Когда rare-mode активен и лот редкой модели уже **ниже флора**, игнорируем обычные пороги скидки и покупаем его первым приоритетом.
+Enabled via the `RARE_MODEL_BELOW_FLOOR_FORCE_BUY = True` flag in `config.py`. When rare mode is active and a rare-model lot is already **below floor**, the regular discount thresholds are ignored and it's bought with top priority.
 
-### Порядок обработки кандидатов в одном скане
+### Candidate processing order within a single scan
 
-В `main.py` кандидаты складываются в один список с приоритетом:
+In `main.py` candidates are collected into one list with this priority:
 
-1. `rare_model_floor` (rare + ниже флора)
-2. `floor` (обычные ниже флора, исключая уже отобранные)
-3. `rare_model` (rare-premium выше флора)
+1. `rare_model_floor` (rare + below floor)
+2. `floor` (regular below-floor, excluding already-selected ones)
+3. `rare_model` (rare-premium above floor)
 
-Максимум **3 попытки покупки на один скан** (`max_buy_attempts_per_scan`), чтобы не спамить API, но успеть на следующий лот если первый уже продан.
+A maximum of **3 buy attempts per scan** (`max_buy_attempts_per_scan`), so the API isn't spammed but we can still catch the next lot if the first is already sold.
 
 ---
 
-## Гейты (фильтры) перед покупкой
+## Pre-purchase gates (filters)
 
-Гейты применяются в таком порядке для каждого кандидата:
+The gates are applied in this order for each candidate:
 
 ### 1. Trade-lock filter
 
-Определяется в `scanner.analyze_trade_lock` по полям `nextResaleDate`, `nextTransferDate`, `unlockDate`, `waitGiftUntil`, `exportDate`, `returnLockedUntil`, `validateRegularGiftAt`.
+Determined in `scanner.analyze_trade_lock` from the `nextResaleDate`, `nextTransferDate`, `unlockDate`, `waitGiftUntil`, `exportDate`, `returnLockedUntil`, `validateRegularGiftAt` fields.
 
-- `lock < 3 дней` → разрешено
-- `3 <= lock < 10 дней` → только если `discount_percent >= 13%`
-- `lock >= 10 дней` → всегда скип
+- `lock < 3 days` → allowed
+- `3 <= lock < 10 days` → only if `discount_percent >= 13%`
+- `lock >= 10 days` → always skip
 
-Пороги: `AUTO_BUY_TRADE_BAN_*` в `config.py`. Отключается `AUTO_BUY_SKIP_TRADE_BAN = False`.
+Thresholds: `AUTO_BUY_TRADE_BAN_*` in `config.py`. Disabled via `AUTO_BUY_SKIP_TRADE_BAN = False`.
 
 ### 2. Balance gate
 
-`listing.listing_price_ton > balance_limit` → скип.
+`listing.listing_price_ton > balance_limit` → skip.
 
-- Для обычной стратегии — `state.balance` (дефолт `AUTO_BUY_MAX_PRICE_TON = 6.0`)
-- Для rare — `state.rare_balance`
+- For the regular strategy — `state.balance` (default `AUTO_BUY_MAX_PRICE_TON = 6.0`)
+- For rare — `state.rare_balance`
 
-При этом считается **статистика упущенного** (только если `price > 8 TON` и `discount >= 3%`), раскладывается по бакетам `8-20`, `20-50`, `50+`, и обновляется "лучший промах за день".
+When this happens, **missed-opportunity statistics** are tracked (only if `price > 8 TON` and `discount >= 3%`), bucketed into `8-20`, `20-50`, `50+`, and the "best miss of the day" is updated.
 
-### 3. Discount bucket (только для `floor`)
+### 3. Discount bucket (only for `floor`)
 
-См. таблицу в "Обычный floor-снайпер".
+See the table in "Regular floor sniper".
 
-### 4. Depth guard (только для `floor`, опционально)
+### 4. Depth guard (only for `floor`, optional)
 
-Анти-дамп защита. Включается тумблером "Анти-дамп" в `/menu`. Алгоритм:
+Anti-dump protection. Toggled via "Anti-dump" in `/menu`. Algorithm:
 
-1. Быстрый путь — посчитать, сколько лотов в текущем фиде имеют ту же коллекцию и цену `<=` нашей.
-2. Если больше `buy_depth_guard_max_at_or_below` (дефолт 3) — скип.
-3. Если в фиде намёк на "толпу" (2+ лота) — делается один снимок `/gifts/saling` с ordering=Price lowToHigh для этой коллекции, и проверка повторяется на живых данных.
-4. Дополнительно: если cheapest-lot ниже нашего больше чем на `buy_depth_guard_near_price_percent %` (дефолт 0.35) — скип.
+1. Fast path — count how many lots in the current feed have the same collection and a price `<=` ours.
+2. If more than `buy_depth_guard_max_at_or_below` (default 3) — skip.
+3. If the feed hints at a "crowd" (2+ lots) — take a single `/gifts/saling` snapshot with ordering=Price lowToHigh for that collection and re-check against live data.
+4. Additionally: if the cheapest lot below ours is more than `buy_depth_guard_near_price_percent %` (default 0.35) below — skip.
 
-Параметры в `config.py`: `AUTO_BUY_DEPTH_GUARD_*`.
+Parameters in `config.py`: `AUTO_BUY_DEPTH_GUARD_*`.
 
-### 5. Собственно вызов `buy_gift`
+### 5. The actual `buy_gift` call
 
-Bot делает `POST /api/v1/gifts/buy` с payload `{"Ids": [gift_id]}` (с fallback на `{"ids": [...]}` и `{"giftIds": [...]}` при 400).
+The bot does `POST /api/v1/gifts/buy` with payload `{"Ids": [gift_id]}` (with fallback to `{"ids": [...]}` and `{"giftIds": [...]}` on a 400).
 
-Интерпретация ответа:
+Response interpretation:
 
-| Ответ | Статус | Действие |
+| Response | Status | Action |
 | --- | --- | --- |
-| `None` (сеть умерла) | ошибка | лог error |
-| `[]` (пустой list) | подарок уже продан | `stat_missed_bought_before++` |
-| `dict` с `error/errors` | серверная ошибка | лог error; если "already sold" — тот же счётчик |
-| непустой `list` | успех | запись purchase, пауза, TG-уведомление |
+| `None` (network died) | error | log error |
+| `[]` (empty list) | gift already sold | `stat_missed_bought_before++` |
+| `dict` with `error/errors` | server error | log error; if "already sold" — same counter |
+| non-empty `list` | success | record purchase, pause, TG notification |
 
 ---
 
-## Движок автопродажи
+## Auto-sell engine
 
-`AutoSellEngine` (`autosell.py`) — **независимый фоновый воркер**, тикает каждые 5 секунд. Включается/выключается через `/sell` (после рестарта OFF).
+`AutoSellEngine` (`autosell.py`) is an **independent background worker** that ticks every 5 seconds. Toggled via `/sell` (OFF after restart).
 
-### Жизненный цикл лота
+### Lot lifecycle
 
 ```
 purchase recorded          ┌─────────┐
@@ -279,238 +279,238 @@ purchase recorded          ┌─────────┐
                                 ▼
                            ┌─────────┐
          relist (change-   │ LISTED  │
-         price) по расп.   └────┬────┘
+         price) on sched.  └────┬────┘
                                 │
               ┌─────────────────┼─────────────────┐
               │                 │                 │
               ▼                 ▼                 ▼
       ┌──────────────┐ ┌──────────────┐  ┌──────────────┐
-      │ stuck >= 2ч  │ │ relist_count │  │ gift исчез   │
-      │ & price >=   │ │ >= limit     │  │ из inventory │
-      │ prompt_      │ └──────┬───────┘  │ 4 цикла      │
+      │ stuck >= 2h  │ │ relist_count │  │ gift gone    │
+      │ & price >=   │ │ >= limit     │  │ from inventory│
+      │ prompt_      │ └──────┬───────┘  │ 4 cycles     │
       │ threshold    │        │          └──────┬───────┘
       └──────┬───────┘        │                 ▼
              │                │           ┌──────────┐
              ▼                ▼           │   HOLD   │
        ┌──────────────────────────┐       └──────────┘
        │      WAIT_PROMPT         │
-       │  (ждём решения из ТГ     │
-       │   или AUTO_TIMEOUT →     │
-       │   hold)                  │
+       │  (wait for a decision    │
+       │   from TG or AUTO_       │
+       │   TIMEOUT → hold)        │
        └──────┬───────────────────┘
               │
-              ▼ (действия: hold / sell_now / buy5 / extend:N)
+              ▼ (actions: hold / sell_now / buy5 / extend:N)
        LISTED / HOLD / SOLD
 ```
 
-### Расчёт цены
+### Price calculation
 
 ```
-target_profit  = 2% для 5-10 TON, 2% для 10+ TON
-floor_premium  = 1.5% для 5-10 TON, 1.0% для 10+ TON
+target_profit  = 2% for 5-10 TON, 2% for 10+ TON
+floor_premium  = 1.5% for 5-10 TON, 1.0% for 10+ TON
 buy_target     = buy_price × (1 + target_profit)
 floor_target   = floor × (1 + floor_premium)
 desired_price  = max(buy_target, floor_target, stop_loss_price)
-stop_loss      = buy_price × (1 - loss_cap_percent%), дефолт -4%
+stop_loss      = buy_price × (1 - loss_cap_percent%), default -4%
 ```
 
-### Критические prompt-ы
+### Critical prompts
 
-Прилетают в Telegram с inline-кнопками:
+These arrive in Telegram with inline buttons:
 
-| Кнопка | Действие |
+| Button | Action |
 | --- | --- |
-| **Холд** | статус → HOLD, ничего не делаем |
-| **Продать сейчас** | если `order_mode_critical_only` ON — пробуем `fill_order` по лучшему bid-у (если bid >= stop_loss); иначе релист с минимальной ценой |
-| **Докупить +5** | `POST /gifts/sell-by-spice`, `extra_changes += 5` |
-| **30м / 1ч / 2ч / 6ч** | `next_critical_at = now + N` минут |
-| **Ввести своё время** | FSM ждёт число минут |
+| **Hold** | status → HOLD, do nothing |
+| **Sell now** | if `order_mode_critical_only` is ON — try `fill_order` against the best bid (if bid >= stop_loss); otherwise relist at the minimum price |
+| **Buy +5** | `POST /gifts/sell-by-spice`, `extra_changes += 5` |
+| **30m / 1h / 2h / 6h** | `next_critical_at = now + N` minutes |
+| **Enter custom time** | FSM waits for a number of minutes |
 
-Если пользователь не ответил в течение `AUTO_SELL_CRITICAL_PROMPT_TIMEOUT_SECONDS = 900` (15 минут) — применяется `default_on_timeout = "hold"`.
+If the user doesn't respond within `AUTO_SELL_CRITICAL_PROMPT_TIMEOUT_SECONDS = 900` (15 minutes), `default_on_timeout = "hold"` is applied.
 
-### Лимит изменений цены
+### Price-change limit
 
 `allowed_price_change_limit(extra_changes) = 5 + extra_changes`.
 
-MRKT даёт 5 бесплатных смен цены, дальше `buy5` покупает пакет из +5 за spice (0.1 TON). После N релистов (где N = этот лимит) движок шлёт критический prompt `relist_limit_reached`.
+MRKT gives 5 free price changes; beyond that, `buy5` purchases a pack of +5 for spice (0.1 TON). After N relists (where N = this limit) the engine sends a `relist_limit_reached` critical prompt.
 
-> В планах — снизить базовое число до `4` (см. спек `.kiro/specs/sniper-reliability-improvements/`).
+> Planned — lower the base number to `4` (see the `.kiro/specs/sniper-reliability-improvements/` spec).
 
 ### Rare-protect
 
-Если `model_rarity_percent <= sell_rare_protect_percent` (дефолт 1.0%) — лот автоматически уходит в HOLD и не продаётся авто. Решение всегда ручное.
+If `model_rarity_percent <= sell_rare_protect_percent` (default 1.0%), the lot automatically goes to HOLD and is not auto-sold. The decision is always manual.
 
-### Sync с инвентарём
+### Inventory sync
 
-Каждые 20 секунд воркер тянет `/api/v1/gifts` (фильтры `isListed=True/False`, по 20 за страницу, обходит курсором до 20 страниц). Это делается **последовательно**, блокирует один слот семафора.
+Every 20 seconds the worker pulls `/api/v1/gifts` (filters `isListed=True/False`, 20 per page, paging by cursor up to 20 pages). This is done **sequentially** and blocks one semaphore slot.
 
-Чтобы не считать подарок проданным из-за нестабильности эндпоинта, реализован буфер `MISSING_INVENTORY_CONFIRM_CYCLES = 4` — лот переходит в HOLD только если его нет в инвентаре 4 цикла подряд.
+To avoid marking a gift as sold due to endpoint instability, a `MISSING_INVENTORY_CONFIRM_CYCLES = 4` buffer is implemented — a lot moves to HOLD only if it's missing from inventory for 4 cycles in a row.
 
 ---
 
-## Telegram-управление
+## Telegram control
 
-Доступно только из чата с `TELEGRAM_NOTIFY_CHAT_ID` (проверка `is_allowed_chat`).
+Available only from the chat with `TELEGRAM_NOTIFY_CHAT_ID` (the `is_allowed_chat` check).
 
-### Команды
+### Commands
 
-| Команда | Что показывает |
+| Command | What it shows |
 | --- | --- |
-| `/start`, `/menu` | главное меню снайпера |
-| `/rare` | меню rare-model стратегии |
-| `/sell` | меню автопродажи |
-| `/stats` | статистика промахов снайпера |
+| `/start`, `/menu` | the sniper's main menu |
+| `/rare` | rare-model strategy menu |
+| `/sell` | auto-sell menu |
+| `/stats` | sniper miss statistics |
 
-### Главное меню (`/menu`)
+### Main menu (`/menu`)
 
-- **Статус: ON/OFF** — тумблер скана (`state.is_running`)
-- **Баланс** — ввод баланса обычной стратегии
-- **Скидка (`<4T`, `>=4T`, `10-20T`, `20T+`)** — пороги по бакетам
-- **Анти-дамп: ON/OFF** — тумблер depth guard
-- **Тест: выставить за 30 TON** — тестовое выставление первого доступного подарка (⚠ без подтверждения)
-- **Статистика снайпера** — показывает то же, что `/stats`
-- **Меню редких моделей** → `/rare`
-- **Меню автопродажи** → `/sell`
+- **Status: ON/OFF** — scan toggle (`state.is_running`)
+- **Balance** — set the regular strategy's balance
+- **Discount (`<4T`, `>=4T`, `10-20T`, `20T+`)** — per-bucket thresholds
+- **Anti-dump: ON/OFF** — depth-guard toggle
+- **Test: list for 30 TON** — test-list the first available gift (⚠ no confirmation)
+- **Sniper statistics** — shows the same as `/stats`
+- **Rare models menu** → `/rare`
+- **Auto-sell menu** → `/sell`
 
-### Меню редких моделей (`/rare`)
+### Rare models menu (`/rare`)
 
-- **Режим редких моделей: ON/OFF** (после рестарта всегда OFF)
-- **Баланс rare**
-- **Premium 5-10T / 10+T** — максимальная премия к флору
-- Статичные индикаторы: мин. цена (5 TON), порог редкости (1.0%)
+- **Rare model mode: ON/OFF** (always OFF after restart)
+- **Rare balance**
+- **Premium 5-10T / 10+T** — maximum premium over floor
+- Static indicators: min price (5 TON), rarity threshold (1.0%)
 
-### Меню автопродажи (`/sell`)
+### Auto-sell menu (`/sell`)
 
-- **Автопродажа: ON/OFF** (после рестарта всегда OFF)
-- **Баланс автопродажи** — не используется для логики продажи, отображение-only
-- **Профит 5-10T / 10+T** — целевая маржа
-- **Премия к флору 5-10T / 10+T**
-- **Релист** — интервал в минутах
-- **Горизонт** — через сколько часов считать лот застрявшим
-- **Лимит убытка** — stop-loss в %
-- **Критика при цене >=** — ниже какой цены не шлём prompt (просто HOLD молча)
-- **Защита редкости** — порог, ниже которого авто не продаём
-- **Режим ордеров** — при "Продать сейчас" пробовать ли `fill_order`
+- **Auto-sell: ON/OFF** (always OFF after restart)
+- **Auto-sell balance** — not used for sell logic, display-only
+- **Profit 5-10T / 10+T** — target margin
+- **Floor premium 5-10T / 10+T**
+- **Relist** — interval in minutes
+- **Horizon** — after how many hours a lot is considered stuck
+- **Loss cap** — stop-loss in %
+- **Critical at price >=** — below which price we don't send a prompt (just HOLD silently)
+- **Rarity protection** — threshold below which we don't auto-sell
+- **Order mode** — whether to try `fill_order` on "Sell now"
 
-### Статистика (`/stats`)
+### Statistics (`/stats`)
 
-- **Упущено: лот уже купили до нас** — счётчик случаев, когда `buy_gift` вернул пусто
-- **Упущено из-за баланса** — суммарно и по бакетам `8-20 / 20-50 / 50+ TON`
-- **Лучший пропущенный за день** — максимальная скидка лота, который не прошёл balance gate
+- **Missed: lot bought before us** — counter for cases where `buy_gift` returned empty
+- **Missed due to balance** — total and per bucket `8-20 / 20-50 / 50+ TON`
+- **Best miss of the day** — the maximum discount of a lot that didn't pass the balance gate
 
-Все значения персистентны между перезапусками (`runtime_state.json`).
+All values are persistent across restarts (`runtime_state.json`).
 
 ---
 
-## Состояние и персистентность
+## State and persistence
 
 ### `runtime_state.json`
 
-Сериализуется `AppState.save()` при каждой модификации "отслеживаемого" поля (см. `MUTABLE_FIELDS` в `state.py`). Атомарная запись: сначала в `.json.tmp`, потом `replace`.
+Serialized by `AppState.save()` on every modification of a "tracked" field (see `MUTABLE_FIELDS` in `state.py`). Atomic write: first to `.json.tmp`, then `replace`.
 
-При старте значения загружаются и **накладываются поверх дефолтов из `config.py`**. Неизвестные в новой версии поля игнорируются, отсутствующие берут дефолты — это обеспечивает backward compat при роллбэке.
+On startup, values are loaded and **layered on top of the defaults from `config.py`**. Fields unknown in the new version are ignored, missing ones take defaults — this provides backward compatibility on rollback.
 
-Особые инварианты при старте:
-- `MAIN_SNIPER_FORCE_RUNNING_ON_START = True` → `is_running = True` даже если в файле `False`
-- `rare_enabled` принудительно `False`
-- `sell_enabled` принудительно `False`
+Special startup invariants:
+- `MAIN_SNIPER_FORCE_RUNNING_ON_START = True` → `is_running = True` even if the file says `False`
+- `rare_enabled` forced to `False`
+- `sell_enabled` forced to `False`
 
 ### `autosell.sqlite3`
 
-Схема (`autosell_store._init_db`):
+Schema (`autosell_store._init_db`):
 
-- **`purchases`** — все совершённые покупки (`gift_id` PK, цена, коллекция, модель, timestamp)
-- **`sell_lots`** — активные и прошлые лоты автопродажи (статус NEW / LISTED / WAIT_PROMPT / HOLD / SOLD)
-- **`critical_prompts`** — очередь prompt-ов с дедлайнами, разрешёнными действиями, флагом обработки
-- **`sell_actions_log`** — audit-лог всех действий движка и пользовательских ответов
+- **`purchases`** — all completed purchases (`gift_id` PK, price, collection, model, timestamp)
+- **`sell_lots`** — active and past auto-sell lots (status NEW / LISTED / WAIT_PROMPT / HOLD / SOLD)
+- **`critical_prompts`** — queue of prompts with deadlines, allowed actions, and a processed flag
+- **`sell_actions_log`** — audit log of all engine actions and user responses
 
-`PRAGMA journal_mode=WAL` для безопасных параллельных чтений.
+`PRAGMA journal_mode=WAL` for safe concurrent reads.
 
 ### `mrkt_telethon_session.session`
 
-Файл сессии Telethon. При утере — нужен повторный логин через `authenticator.py`. Не переносить на другую машину без выхода из аккаунта, Telegram считает это подозрительным.
+The Telethon session file. If lost, you need to re-login via `authenticator.py`. Don't move it to another machine without logging out of the account — Telegram treats that as suspicious.
 
 ### `startup_notify_state.json`
 
-Хранит `last_startup_notify_ts` — защита от спама "Bot started" при рестарт-лупе (cooldown 15 минут).
+Stores `last_startup_notify_ts` — protection against "Bot started" spam during a restart loop (15-minute cooldown).
 
 ---
 
-## Логирование и диагностика
+## Logging and diagnostics
 
-### Формат
+### Format
 
 ```
 <timestamp> [<logger-name>] <LEVEL>: <message>
 ```
 
-Уровни: `INFO` по умолчанию, `DEBUG` при `VERBOSE = True` в `config.py`.
+Levels: `INFO` by default, `DEBUG` when `VERBOSE = True` in `config.py`.
 
-### Ключевые логгеры
+### Key loggers
 
-- `mrkt.main` — главный цикл, покупки, статистика
-- `mrkt.scanner` — загрузка коллекций и фида
-- `mrkt.api` — HTTP-запросы (BUY REQUEST / BUY RESPONSE, 401/429/timeout)
-- `mrkt.autosell` — действия движка автопродажи
-- `mrkt.auth` — обновление токена
-- `mrkt.tg_bot` — Telegram-контроллер
+- `mrkt.main` — main loop, purchases, statistics
+- `mrkt.scanner` — loading collections and the feed
+- `mrkt.api` — HTTP requests (BUY REQUEST / BUY RESPONSE, 401/429/timeout)
+- `mrkt.autosell` — auto-sell engine actions
+- `mrkt.auth` — token refresh
+- `mrkt.tg_bot` — Telegram controller
 
-### Консольный вывод
+### Console output
 
-`bot.py` рисует ASCII-баннер при старте, цветные блоки для below-floor deals, сводку по каждому скану (`X новых листингов | Y НИЖЕ ФЛОРА`). Звуковой алерт (Windows only): `winsound.Beep` при любом сигнале.
+`bot.py` draws an ASCII banner at startup, colored blocks for below-floor deals, and a per-scan summary (`X new listings | Y BELOW FLOOR`). Sound alert (Windows only): `winsound.Beep` on any signal.
 
-### Запросы на покупку
+### Buy requests
 
-Каждая попытка покупки логируется в `INFO`:
+Every buy attempt is logged at `INFO`:
 ```
 BUY REQUEST: POST /api/v1/gifts/buy | gift_id=... | payload_variant=1 keys=['Ids']
 BUY RESPONSE: [...]
 ```
 
-Полезно для post-mortem анализа "почему мы не купили этот лот".
+Useful for post-mortem analysis of "why didn't we buy that lot".
 
 ---
 
-## Известные ограничения и технический долг
+## Known limitations and technical debt
 
-> Не все баги — критические. Список отсортирован по приоритету.
+> Not all bugs are critical. The list is sorted by priority.
 
-### 🔴 Критично
+### 🔴 Critical
 
-1. **Секреты в `config.py`.** `API_TOKEN`, `TELEGRAM_API_HASH`, `TELEGRAM_NOTIFY_BOT_TOKEN`, `TELEGRAM_NOTIFY_CHAT_ID` вшиты в исходник. Перед публикацией репозитория — вынести в `.env` + `python-dotenv`.
-2. **Mojibake в исходниках.** Значительная часть русских строк в `main.py` и `tg_controller.py` хранится как "ломаный cp1251 в UTF-8" (`"РџР°РЅРµР»СЊ"`). `text_normalizer.normalize_text` на лету переконвертирует текст перед отправкой в Telegram, но сами файлы так не починишь — нужен полный sweep с перекодировкой.
-3. **Floor обновляется раз в ~60 сканов (≈1 мин).** При `SCAN_INTERVAL_SECONDS=1` это очень долго — `discount_percent` считается по устаревшему floor, что даёт и ложные, и упущенные сигналы. Запланировано снижение до ~12 секунд (см. спек `sniper-reliability-improvements`).
-4. **Scanner читает только 100 последних листингов.** Если за скан появилось больше новых лотов (или сеть задержалась), ниже-флоровый лот мог вылететь из окна. Дополнительный проход с `ordering="Price", lowToHigh=True` по горячим коллекциям закрыл бы дыру.
-5. **Trade-lock валидируется только по данным из глобального фида.** Не все поля (`nextResaleDate` и т.п.) гарантированно возвращаются в `/gifts/saling`. В редких случаях возможна покупка лота, который через минуту нельзя перепродать.
+1. **Secrets must not be committed.** `API_TOKEN`, `TELEGRAM_API_HASH`, `TELEGRAM_NOTIFY_BOT_TOKEN`, `TELEGRAM_NOTIFY_CHAT_ID` are now read from the environment (`.env` + `python-dotenv`). If any of these were ever committed in history, rotate them.
+2. **Mojibake in the sources.** A significant portion of the Russian strings in `main.py` and `tg_controller.py` is stored as "broken cp1251 in UTF-8" (`"РџР°РЅРµР»СЊ"`). `text_normalizer.normalize_text` re-converts text on the fly before sending to Telegram, but the files themselves aren't fixed this way — a full re-encoding sweep is needed.
+3. **Floor refreshes once every ~60 scans (≈1 min).** With `SCAN_INTERVAL_SECONDS=1` this is very slow — `discount_percent` is computed against a stale floor, producing both false and missed signals. A reduction to ~12 seconds is planned (see the `sniper-reliability-improvements` spec).
+4. **Scanner only reads the latest 100 listings.** If more new lots appear in one scan (or the network lags), a below-floor lot could fall out of the window. An extra pass with `ordering="Price", lowToHigh=True` over hot collections would close the gap.
+5. **Trade-lock is validated only from global-feed data.** Not all fields (`nextResaleDate`, etc.) are guaranteed to be returned in `/gifts/saling`. In rare cases this could buy a lot that can't be resold a minute later.
 
-### 🟡 Важно
+### 🟡 Important
 
-6. **`winsound.Beep` блокирует event loop ~700 мс.** Каждый below-floor сигнал съедает пол-скана. Решение: `asyncio.to_thread(winsound.Beep, ...)` или вообще выключить на VPS.
-7. **`state.save()` на каждом `__setattr__`.** Инкременты статистики промахов вызывают запись всего JSON десятки раз в секунду. Нужен throttled flush или отдельный stats store.
-8. **Нет супервизии фоновых задач.** `tg_task` и `autosell_task` создаются через `asyncio.create_task`, без `add_done_callback` с перезапуском. Если одна упадёт — тихо.
-9. **Гонка при 401-шторме.** 7 конкурентных запросов одновременно могут инициировать refresh токена через Telethon. Нужен `asyncio.Lock` на `_update_token`.
-10. **Off-by-one в лимите изменений цены автопродажи.** `allowed_price_change_limit = 5 + extra_changes`, а MRKT даёт **4** бесплатных. Фикс запланирован в `sniper-reliability-improvements`.
-11. **FSM aiogram в памяти.** При рестарте бота FSM-состояния теряются, пользователь может залипнуть в "ожидании ввода". Нужен persistent storage.
+6. **`winsound.Beep` blocks the event loop ~700 ms.** Each below-floor signal eats half a scan. Fix: `asyncio.to_thread(winsound.Beep, ...)` or disable it entirely on a VPS.
+7. **`state.save()` on every `__setattr__`.** Miss-statistics increments rewrite the whole JSON dozens of times per second. A throttled flush or a separate stats store is needed.
+8. **No supervision of background tasks.** `tg_task` and `autosell_task` are created via `asyncio.create_task` without an `add_done_callback` to restart them. If one crashes, it does so silently.
+9. **Race during a 401 storm.** 7 concurrent requests could simultaneously trigger a token refresh via Telethon. An `asyncio.Lock` on `_update_token` is needed.
+10. **Off-by-one in the auto-sell price-change limit.** `allowed_price_change_limit = 5 + extra_changes`, but MRKT gives **4** free. Fix planned in `sniper-reliability-improvements`.
+11. **aiogram FSM is in memory.** On a bot restart, FSM states are lost and the user can get stuck "waiting for input". Persistent storage is needed.
 
-### 🟢 Мелочи
+### 🟢 Minor
 
-12. Кнопка **"Тест выставить за 30 TON"** — без подтверждения. Случайный тык может продать лот под флор. Стоит добавить confirm с текущим floor.
-13. **`Scanner._scan_collection`** больше не используется (в `scan_all` только global feed), но остался в коде.
-14. **`MIN_DISCOUNT_PERCENT=2%` vs `AUTO_BUY_MIN_DISCOUNT_CHEAP=4%`** — при 3% скидке лот подсвечивается как below-floor и пищит winsound, но купить его нельзя. Визуальный шум.
-15. **Payload `get_my_gifts`** содержит дублирующиеся ключи (`lowToHigh`, `luckyBuy` по два раза в одном dict). Python берёт последнее — работает, но некрасиво.
+12. The **"Test list for 30 TON"** button has no confirmation. An accidental tap could sell a lot below floor. A confirm showing the current floor should be added.
+13. **`Scanner._scan_collection`** is no longer used (`scan_all` only uses the global feed) but remains in the code.
+14. **`MIN_DISCOUNT_PERCENT=2%` vs `AUTO_BUY_MIN_DISCOUNT_CHEAP=4%`** — at a 3% discount a lot is highlighted as below-floor and beeps via winsound, but can't be bought. Visual noise.
+15. **The `get_my_gifts` payload** contains duplicate keys (`lowToHigh`, `luckyBuy` appear twice in one dict). Python takes the last one — it works, but it's ugly.
 
-### ⚪ Deferred (будущие фичи)
+### ⚪ Deferred (future features)
 
-- **Monochrome detector** — автоматическое определение "монохромных" сочетаний модели и фона через бесплатный vision-API (Gemini Flash / Cloudflare Workers AI) с локальным кэшем. Слишком медленно для hot path, но подходит для background-воркера.
-- **Backtest engine** — сохранение сырых ответов `/gifts/saling` в jsonl для проигрывания новых стратегий оффлайн.
-- **Daily P/L summary** — сводка по сделкам в ТГ раз в сутки.
-- **Kill-switch по совокупному убытку** — пауза бота при накопленном минусе за день.
+- **Monochrome detector** — automatic detection of "monochrome" model/background combinations via a free vision API (Gemini Flash / Cloudflare Workers AI) with a local cache. Too slow for the hot path, but suitable for a background worker.
+- **Backtest engine** — saving raw `/gifts/saling` responses to jsonl to replay new strategies offline.
+- **Daily P/L summary** — a trade summary to Telegram once a day.
+- **Kill-switch on cumulative loss** — pause the bot when the accumulated daily loss exceeds a threshold.
 
 ---
 
-## Базовый пример MRKT API
+## Basic MRKT API example
 
-Для справки — минимальный рабочий пример получения токена и скана листингов из неофициальной документации MRKT.
+For reference — a minimal working example of fetching a token and scanning listings, from the unofficial MRKT docs.
 
 ```python
 import asyncio
@@ -565,29 +565,29 @@ async def main():
 asyncio.run(main())
 ```
 
-В этом репозитории этот код сильно расширен — отдельно см. `api.py`, `authenticator.py`, `scanner.py`.
+In this repository that code is heavily extended — see `api.py`, `authenticator.py`, and `scanner.py` separately.
 
-### Основные эндпоинты MRKT, используемые ботом
+### Main MRKT endpoints used by the bot
 
-| Method | Endpoint | Назначение |
+| Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/v1/auth` | обмен `tgWebAppData` на токен |
-| `GET` | `/api/v1/gifts/collections` | список коллекций + `floorPriceNanoTons` |
-| `POST` | `/api/v1/gifts/saling` | активные листинги (фид и поколлекционный) |
-| `POST` | `/api/v1/gifts/buy` | покупка по id |
-| `POST` | `/api/v1/gifts` | свой инвентарь (с фильтром `isListed`) |
-| `POST` | `/api/v1/gifts/sale` | выставить на продажу |
-| `POST` | `/api/v1/gifts/sale/change-price` | изменить цену листинга |
-| `POST` | `/api/v1/gifts/sale/cancel` | снять с продажи |
-| `POST` | `/api/v1/gifts/sell-by-spice` | купить +5 смен цены за spice |
-| `POST` | `/api/v1/orders/top` | топ-bid по коллекции/модели |
-| `POST` | `/api/v1/orders` | глубина ордеров |
-| `GET` | `/api/v1/orders/all-collection-top` | топ-bid по всем коллекциям |
-| `POST` | `/api/v1/orders/fill/` | мгновенное исполнение ордера |
-| `POST` | `/api/v1/orders/get-my-orders` | свои ордера |
+| `POST` | `/api/v1/auth` | exchange `tgWebAppData` for a token |
+| `GET` | `/api/v1/gifts/collections` | list of collections + `floorPriceNanoTons` |
+| `POST` | `/api/v1/gifts/saling` | active listings (feed and per-collection) |
+| `POST` | `/api/v1/gifts/buy` | buy by id |
+| `POST` | `/api/v1/gifts` | own inventory (with the `isListed` filter) |
+| `POST` | `/api/v1/gifts/sale` | list for sale |
+| `POST` | `/api/v1/gifts/sale/change-price` | change a listing's price |
+| `POST` | `/api/v1/gifts/sale/cancel` | cancel a sale |
+| `POST` | `/api/v1/gifts/sell-by-spice` | buy +5 price changes for spice |
+| `POST` | `/api/v1/orders/top` | top bid for a collection/model |
+| `POST` | `/api/v1/orders` | order-book depth |
+| `GET` | `/api/v1/orders/all-collection-top` | top bid across all collections |
+| `POST` | `/api/v1/orders/fill/` | instant order execution |
+| `POST` | `/api/v1/orders/get-my-orders` | own orders |
 
 ---
 
-## Лицензия
+## License
 
-Используйте на свой страх и риск. Бот работает с реальным балансом TON — любой баг в логике покупки/продажи может привести к потере средств. Тестируйте изменения на маленьком балансе.
+Use at your own risk. The bot operates with a real TON balance — any bug in the buy/sell logic can lead to loss of funds. Test changes on a small balance.
